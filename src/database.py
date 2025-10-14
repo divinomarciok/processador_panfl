@@ -4,6 +4,7 @@ Gerencia todas as interações com o banco de dados.
 """
 
 import os
+import re
 import logging
 from typing import Optional, Dict, List, Tuple, Any
 from contextlib import contextmanager
@@ -441,6 +442,41 @@ class PanfletoDatabase:
         super_id = self.criar_supermercado(nome)
         return super_id, True
 
+    def _expandir_produtos_multiplos(self, produto_data: Dict) -> List[Dict]:
+        """
+        Expande produtos que contêm "ou" no nome em múltiplos produtos.
+
+        Exemplo: "Picanha OU Alcatra OU Contra Filé"
+        -> ["Picanha", "Alcatra", "Contra Filé"]
+
+        Args:
+            produto_data: Dict com dados do produto do LLM
+
+        Returns:
+            Lista de produtos expandidos (ou lista com 1 produto se não houver "ou")
+        """
+        nome = produto_data.get('nome', '')
+
+        # Detectar " ou " no nome (case insensitive)
+        # Padrão: procura por "ou" cercado por espaços
+        if re.search(r'\s+ou\s+', nome, re.IGNORECASE):
+            # Dividir por "ou" e limpar espaços
+            nomes = re.split(r'\s+ou\s+', nome, flags=re.IGNORECASE)
+            nomes = [n.strip() for n in nomes if n.strip()]
+
+            # Criar cópia do produto para cada nome
+            produtos_expandidos = []
+            for nome_individual in nomes:
+                produto_copia = produto_data.copy()
+                produto_copia['nome'] = nome_individual
+                produtos_expandidos.append(produto_copia)
+
+            logger.info(f"Produto expandido: '{nome}' → {len(produtos_expandidos)} produtos")
+            return produtos_expandidos
+
+        # Se não tem "ou", retorna lista com produto original
+        return [produto_data]
+
     def salvar_preco(
         self,
         produto_id: int,
@@ -556,48 +592,54 @@ class PanfletoDatabase:
                         stats['erros'].append(f"Produto {idx+1}: nome vazio")
                         continue
 
-                    marca = produto_data.get('marca')
-                    categoria = produto_data.get('categoria')
-                    preco = produto_data.get('preco')
-                    preco_original = produto_data.get('preco_original')
-                    em_promocao = produto_data.get('em_promocao', False)
-                    unidade = produto_data.get('unidade')
-                    descricao = produto_data.get('descricao_adicional')
-                    confianca = produto_data.get('confianca')
+                    # ✨ EXPANDIR PRODUTOS COM "OU"
+                    produtos_expandidos = self._expandir_produtos_multiplos(produto_data)
 
-                    # Validar preço
-                    if preco is None or preco < 0:
-                        stats['erros'].append(f"Produto {nome}: preço inválido")
-                        continue
+                    # Processar cada produto expandido
+                    for prod in produtos_expandidos:
+                        nome = prod.get('nome')
+                        marca = prod.get('marca')
+                        categoria = prod.get('categoria')
+                        preco = prod.get('preco')
+                        preco_original = prod.get('preco_original')
+                        em_promocao = prod.get('em_promocao', False)
+                        unidade = prod.get('unidade')
+                        descricao = prod.get('descricao_adicional')
+                        confianca = prod.get('confianca')
 
-                    # Buscar ou criar produto
-                    produto_id, produto_novo = self.buscar_ou_criar_produto(
-                        nome=nome,
-                        marca=marca,
-                        categoria=categoria
-                    )
+                        # Validar preço
+                        if preco is None or preco < 0:
+                            stats['erros'].append(f"Produto {nome}: preço inválido")
+                            continue
 
-                    if produto_novo:
-                        stats['produtos_novos'] += 1
-                    else:
-                        stats['produtos_existentes'] += 1
+                        # Buscar ou criar produto
+                        produto_id, produto_novo = self.buscar_ou_criar_produto(
+                            nome=nome,
+                            marca=marca,
+                            categoria=categoria
+                        )
 
-                    # Salvar preço
-                    preco_id = self.salvar_preco(
-                        produto_id=produto_id,
-                        supermercado_id=supermercado_id,
-                        imagem_id=imagem_id,
-                        preco=float(preco),
-                        preco_original=float(preco_original) if preco_original else None,
-                        em_promocao=em_promocao,
-                        validade_inicio=data_inicio,
-                        validade_fim=data_fim,
-                        unidade=unidade,
-                        descricao_adicional=descricao,
-                        confianca=float(confianca) if confianca else None
-                    )
+                        if produto_novo:
+                            stats['produtos_novos'] += 1
+                        else:
+                            stats['produtos_existentes'] += 1
 
-                    stats['precos_salvos'] += 1
+                        # Salvar preço
+                        preco_id = self.salvar_preco(
+                            produto_id=produto_id,
+                            supermercado_id=supermercado_id,
+                            imagem_id=imagem_id,
+                            preco=float(preco),
+                            preco_original=float(preco_original) if preco_original else None,
+                            em_promocao=em_promocao,
+                            validade_inicio=data_inicio,
+                            validade_fim=data_fim,
+                            unidade=unidade,
+                            descricao_adicional=descricao,
+                            confianca=float(confianca) if confianca else None
+                        )
+
+                        stats['precos_salvos'] += 1
 
                 except Exception as e:
                     erro_msg = f"Erro ao processar produto {idx+1}: {str(e)}"
