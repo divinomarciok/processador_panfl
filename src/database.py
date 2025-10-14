@@ -21,6 +21,107 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+# Mapeamento inteligente de categorias
+# Mapeia categorias que o LLM pode retornar para as categorias do banco
+MAPEAMENTO_CATEGORIAS = {
+    # Bebidas
+    'bebidas em pó': 'Bebidas',
+    'bebidas em po': 'Bebidas',
+    'refrigerantes': 'Bebidas',
+    'sucos': 'Bebidas',
+    'água': 'Bebidas',
+    'agua': 'Bebidas',
+
+    # Bebidas Alcoólicas
+    'bebidas alcoolicas': 'Bebidas Alcoólicas',
+    'bebidas alcoólicas': 'Bebidas Alcoólicas',
+    'cervejas': 'Bebidas Alcoólicas',
+    'vinhos': 'Bebidas Alcoólicas',
+    'destilados': 'Bebidas Alcoólicas',
+
+    # Carnes
+    'carne bovina': 'Carnes',
+    'carne suína': 'Carnes',
+    'carne suina': 'Carnes',
+    'aves': 'Carnes',
+    'frango': 'Carnes',
+    'peixes': 'Carnes',
+    'pescados': 'Carnes',
+    'açougue': 'Carnes',
+    'acougue': 'Carnes',
+
+    # Frios e Laticínios
+    'laticinios': 'Frios e Laticínios',
+    'laticínios': 'Frios e Laticínios',
+    'queijos': 'Frios e Laticínios',
+    'frios': 'Frios e Laticínios',
+    'iogurtes': 'Frios e Laticínios',
+    'leite': 'Frios e Laticínios',
+
+    # Frutas
+    'frutas frescas': 'Frutas',
+    'hortifruti': 'Frutas',
+
+    # Verduras e Legumes
+    'verduras': 'Verduras e Legumes',
+    'legumes': 'Verduras e Legumes',
+    'hortaliças': 'Verduras e Legumes',
+    'hortalicas': 'Verduras e Legumes',
+    'temperos frescos': 'Verduras e Legumes',
+
+    # Mercearia
+    'mercearia seca': 'Mercearia',
+    'grãos': 'Mercearia',
+    'graos': 'Mercearia',
+    'arroz': 'Mercearia',
+    'feijão': 'Mercearia',
+    'feijao': 'Mercearia',
+    'macarrão': 'Mercearia',
+    'macarrao': 'Mercearia',
+    'massas': 'Mercearia',
+    'óleos': 'Mercearia',
+    'oleos': 'Mercearia',
+    'ingredientes': 'Mercearia',
+    'ingredientes para confeitaria': 'Mercearia',
+
+    # Panificação
+    'pães': 'Panificação',
+    'paes': 'Panificação',
+    'padaria': 'Panificação',
+    'bolos': 'Panificação',
+
+    # Doces e Sobremesas
+    'doces': 'Doces e Sobremesas',
+    'chocolates': 'Doces e Sobremesas',
+    'balas': 'Doces e Sobremesas',
+    'sobremesas': 'Doces e Sobremesas',
+    'guloseimas': 'Doces e Sobremesas',
+
+    # Molhos e Temperos
+    'molhos': 'Molhos e Temperos',
+    'condimentos': 'Molhos e Temperos',
+    'temperos': 'Molhos e Temperos',
+    'temperos secos': 'Molhos e Temperos',
+
+    # Higiene Pessoal
+    'higiene': 'Higiene Pessoal',
+    'higiene pessoal': 'Higiene Pessoal',
+    'cosméticos': 'Higiene Pessoal',
+    'cosmeticos': 'Higiene Pessoal',
+    'perfumaria': 'Higiene Pessoal',
+
+    # Limpeza
+    'produtos de limpeza': 'Limpeza',
+    'limpeza doméstica': 'Limpeza',
+    'limpeza domestica': 'Limpeza',
+
+    # Congelados
+    'produtos congelados': 'Congelados',
+    'alimentos congelados': 'Congelados',
+    'frozen': 'Congelados',
+}
+
+
 class DatabaseConnection:
     """Gerenciador de conexão com PostgreSQL."""
 
@@ -245,9 +346,39 @@ class PanfletoDatabase:
             result = cursor.fetchone()
             return dict(result) if result else None
 
+    def _mapear_categoria_inteligente(self, nome_categoria: str) -> str:
+        """
+        Mapeia categoria do LLM para categoria do banco usando mapeamento inteligente.
+
+        Args:
+            nome_categoria: Nome da categoria retornada pelo LLM
+
+        Returns:
+            Nome da categoria do banco (ou original se não mapear)
+        """
+        if not nome_categoria:
+            return nome_categoria
+
+        nome_lower = nome_categoria.lower().strip()
+
+        # 1. Busca exata no mapeamento
+        if nome_lower in MAPEAMENTO_CATEGORIAS:
+            categoria_mapeada = MAPEAMENTO_CATEGORIAS[nome_lower]
+            logger.info(f"Categoria mapeada: '{nome_categoria}' → '{categoria_mapeada}'")
+            return categoria_mapeada
+
+        # 2. Busca parcial (se contém palavra-chave)
+        for chave, valor in MAPEAMENTO_CATEGORIAS.items():
+            if chave in nome_lower or nome_lower in chave:
+                logger.info(f"Categoria mapeada (parcial): '{nome_categoria}' → '{valor}'")
+                return valor
+
+        # 3. Não encontrou mapeamento, retorna original
+        return nome_categoria
+
     def buscar_ou_criar_categoria(self, nome_categoria: str) -> Optional[int]:
         """
-        Busca categoria existente ou retorna categoria 'Outros'.
+        Busca categoria existente usando mapeamento inteligente ou retorna categoria 'Outros'.
 
         Args:
             nome_categoria: Nome da categoria vindo do LLM
@@ -260,15 +391,18 @@ class PanfletoDatabase:
             categoria = self.buscar_categoria_por_nome('Outros')
             return categoria['id'] if categoria else None
 
-        # Buscar categoria exata
-        categoria = self.buscar_categoria_por_nome(nome_categoria)
+        # ✨ MAPEAMENTO INTELIGENTE
+        categoria_mapeada = self._mapear_categoria_inteligente(nome_categoria)
+
+        # Buscar categoria mapeada no banco
+        categoria = self.buscar_categoria_por_nome(categoria_mapeada)
         if categoria:
             return categoria['id']
 
-        # Se não encontrar, retorna "Outros"
+        # Se ainda não encontrar, retorna "Outros"
         categoria_outros = self.buscar_categoria_por_nome('Outros')
         if categoria_outros:
-            logger.warning(f"Categoria '{nome_categoria}' não encontrada, usando 'Outros'")
+            logger.warning(f"Categoria '{categoria_mapeada}' não encontrada no banco, usando 'Outros'")
             return categoria_outros['id']
 
         return None
