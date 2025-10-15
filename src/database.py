@@ -438,6 +438,7 @@ class PanfletoDatabase:
         marca: Optional[str] = None,
         categoria: Optional[str] = None,
         categoria_id: Optional[int] = None,
+        categoria_sugerida: Optional[str] = None,
         codigo_barras: Optional[str] = None,
         descricao: Optional[str] = None
     ) -> int:
@@ -449,6 +450,7 @@ class PanfletoDatabase:
             marca: Marca do produto
             categoria: Categoria (texto, mantido por compatibilidade)
             categoria_id: ID da categoria (foreign key para categorias)
+            categoria_sugerida: Categoria original sugerida pelo LLM antes do mapeamento
             codigo_barras: Código de barras
             descricao: Descrição adicional
 
@@ -456,16 +458,22 @@ class PanfletoDatabase:
             ID do produto criado
         """
         query = """
-            INSERT INTO produtos_tabela (nome, marca, categoria, categoria_id, codigo_barras, descricao)
-            VALUES (%s, %s, %s, %s, %s, %s)
+            INSERT INTO produtos_tabela (nome, marca, categoria, categoria_id, categoria_sugerida, codigo_barras, descricao)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             RETURNING id
         """
 
         with self.db.get_cursor() as cursor:
-            cursor.execute(query, (nome, marca, categoria, categoria_id, codigo_barras, descricao))
+            cursor.execute(query, (nome, marca, categoria, categoria_id, categoria_sugerida, codigo_barras, descricao))
             result = cursor.fetchone()
             produto_id = result['id']
-            logger.info(f"Produto criado: {nome} (ID: {produto_id}, Categoria ID: {categoria_id})")
+
+            # Log diferente se categoria foi mapeada
+            if categoria_sugerida and categoria and categoria_sugerida.lower().strip() != categoria.lower().strip():
+                logger.info(f"Produto criado: {nome} (ID: {produto_id}, Categoria: '{categoria_sugerida}' → '{categoria}')")
+            else:
+                logger.info(f"Produto criado: {nome} (ID: {produto_id}, Categoria ID: {categoria_id})")
+
             return produto_id
 
     def buscar_ou_criar_produto(
@@ -490,16 +498,29 @@ class PanfletoDatabase:
         if produto:
             return produto['id'], False
 
-        # Resolver categoria_id a partir do nome da categoria
+        # Preservar categoria original do LLM
+        categoria_sugerida = categoria
+
+        # Resolver categoria_id a partir do nome da categoria (com mapeamento)
         categoria_id = None
+        categoria_mapeada = None
         if categoria:
             categoria_id = self.buscar_ou_criar_categoria(categoria)
+            # Buscar nome da categoria mapeada
+            if categoria_id:
+                cat_obj = self.db.get_cursor()
+                with self.db.get_cursor() as cursor:
+                    cursor.execute("SELECT nome FROM categorias WHERE id = %s", (categoria_id,))
+                    result = cursor.fetchone()
+                    if result:
+                        categoria_mapeada = result['nome']
 
         produto_id = self.criar_produto(
             nome=nome,
             marca=marca,
-            categoria=categoria,  # Mantém texto para compatibilidade
-            categoria_id=categoria_id  # Adiciona foreign key
+            categoria=categoria_mapeada or categoria,  # Categoria mapeada ou original
+            categoria_id=categoria_id,  # Foreign key
+            categoria_sugerida=categoria_sugerida  # Categoria original do LLM
         )
         return produto_id, True
 
@@ -834,6 +855,81 @@ class PanfletoDatabase:
             stats['total_promocoes'] = cursor.fetchone()['total']
 
         return stats
+
+    def obter_categorias_sugeridas_mais_frequentes(
+        self,
+        limite: int = 20,
+        apenas_nao_mapeadas: bool = True
+    ) -> List[Dict[str, Any]]:
+        """
+        Retorna categorias sugeridas mais frequentes para análise.
+
+        Args:
+            limite: Número máximo de categorias a retornar
+            apenas_nao_mapeadas: Se True, mostra apenas categorias classificadas como 'Outros'
+
+        Returns:
+            Lista de dicts com: categoria_sugerida, quantidade, exemplos de produtos
+        """
+        if apenas_nao_mapeadas:
+            query = """
+                SELECT
+                    categoria_sugerida,
+                    COUNT(*) as quantidade,
+                    STRING_AGG(DISTINCT nome, ' | ' ORDER BY nome) as exemplos_produtos
+                FROM produtos_tabela
+                WHERE categoria_sugerida IS NOT NULL
+                  AND categoria = 'Outros'
+                GROUP BY categoria_sugerida
+                ORDER BY quantidade DESC
+                LIMIT %s
+            """
+        else:
+            query = """
+                SELECT
+                    categoria_sugerida,
+                    categoria as categoria_mapeada,
+                    COUNT(*) as quantidade,
+                    STRING_AGG(DISTINCT nome, ' | ' ORDER BY nome) as exemplos_produtos
+                FROM produtos_tabela
+                WHERE categoria_sugerida IS NOT NULL
+                  AND LOWER(TRIM(categoria_sugerida)) != LOWER(TRIM(COALESCE(categoria, '')))
+                GROUP BY categoria_sugerida, categoria
+                ORDER BY quantidade DESC
+                LIMIT %s
+            """
+
+        with self.db.get_cursor() as cursor:
+            cursor.execute(query, (limite,))
+            results = cursor.fetchall()
+            return [dict(row) for row in results]
+
+    def obter_estatisticas_mapeamento_categorias(self) -> Dict[str, Any]:
+        """
+        Retorna estatísticas sobre o mapeamento de categorias.
+
+        Returns:
+            Dict com estatísticas de mapeamento
+        """
+        query = """
+            SELECT
+                CASE
+                    WHEN categoria = 'Outros' THEN 'Não Mapeada'
+                    WHEN categoria_sugerida IS NULL THEN 'Sem Sugestão'
+                    WHEN LOWER(TRIM(categoria_sugerida)) = LOWER(TRIM(categoria)) THEN 'Exata'
+                    ELSE 'Mapeada'
+                END as tipo_mapeamento,
+                COUNT(*) as quantidade,
+                ROUND(COUNT(*) * 100.0 / (SELECT COUNT(*) FROM produtos_tabela), 2) as percentual
+            FROM produtos_tabela
+            GROUP BY tipo_mapeamento
+            ORDER BY quantidade DESC
+        """
+
+        with self.db.get_cursor() as cursor:
+            cursor.execute(query)
+            results = cursor.fetchall()
+            return {row['tipo_mapeamento']: dict(row) for row in results}
 
 
 def criar_conexao_do_env() -> DatabaseConnection:
