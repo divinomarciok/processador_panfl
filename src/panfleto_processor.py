@@ -354,12 +354,13 @@ class LLMClient:
                 [prompt, img],
                 generation_config={
                     'temperature': 0.2,
-                    'max_output_tokens': 4096,
+                    'max_output_tokens': 8192,
                 }
             )
 
             resposta = response.text
             logger.info("Resposta recebida do Gemini")
+            logger.info(f"RESPOSTA COMPLETA DO GEMINI:\n{resposta}")
             return resposta
 
         except Exception as e:
@@ -424,24 +425,32 @@ class JSONParser:
         Raises:
             ValueError: Se não conseguir extrair JSON válido
         """
+        # Remover blocos de código markdown (```json ... ```)
+        import re
+        texto_limpo = re.sub(r'```json\s*', '', texto)
+        texto_limpo = re.sub(r'```\s*$', '', texto_limpo)
+        texto_limpo = texto_limpo.strip()
+
         # Tentar parsear diretamente
         try:
-            return json.loads(texto)
+            return json.loads(texto_limpo)
         except json.JSONDecodeError:
             pass
 
         # Tentar encontrar JSON no texto
-        inicio = texto.find('{')
-        fim = texto.rfind('}')
+        inicio = texto_limpo.find('{')
+        fim = texto_limpo.rfind('}')
 
         if inicio == -1 or fim == -1:
             raise ValueError("Nenhum JSON encontrado na resposta")
 
         try:
-            json_str = texto[inicio:fim + 1]
+            json_str = texto_limpo[inicio:fim + 1]
+            logger.info(f"Tentando parsear JSON extraído (tamanho: {len(json_str)} chars)")
             return json.loads(json_str)
         except json.JSONDecodeError as e:
             logger.error(f"Erro ao parsear JSON: {e}")
+            logger.error(f"JSON problemático (últimos 200 chars): ...{json_str[-200:]}")
             raise ValueError(f"JSON inválido: {e}")
 
     @staticmethod
@@ -541,6 +550,7 @@ class PanfletoProcessor:
 
         # Parsear JSON
         logger.info("Parseando resposta...")
+        logger.info(f"RESPOSTA A SER PARSEADA (primeiros 500 chars):\n{resposta[:500]}")
         dados = self.json_parser.extrair_json(resposta)
 
         # Validar dados
