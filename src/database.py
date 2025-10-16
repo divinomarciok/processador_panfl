@@ -407,30 +407,52 @@ class PanfletoDatabase:
 
         return None
 
-    def buscar_produto_por_nome(self, nome: str, margem: float = 0.8) -> Optional[Dict]:
+    def buscar_produto_por_nome(self, nome: str, margem: float = 0.85) -> Optional[Dict]:
         """
-        Busca produto por nome usando normalização.
+        Busca produto por nome usando estratégia inteligente:
+        1. Busca exata (nome_normalizado)
+        2. Busca por alias
+        3. Busca fuzzy em aliases
+        4. Busca fuzzy em produtos
 
         Args:
             nome: Nome do produto
-            margem: Margem de similaridade (não usado)
+            margem: Margem de similaridade para busca fuzzy (0-1, padrão: 0.85)
 
         Returns:
             Dict com dados do produto ou None
         """
         query = """
-            SELECT * FROM produtos_tabela
-            WHERE nome_normalizado = normalizar_nome(%s)
-            ORDER BY created_at DESC
-            LIMIT 1
+            SELECT
+                p.id, p.nome, p.nome_normalizado, p.marca, p.categoria,
+                p.categoria_id, p.categoria_sugerida, p.codigo_barras,
+                p.descricao, p.created_at, p.updated_at,
+                bi.similaridade, bi.origem_match
+            FROM buscar_produto_inteligente(%s, %s) bi
+            INNER JOIN produtos_tabela p ON bi.id = p.id
         """
 
         with self.db.get_cursor() as cursor:
-            # Busca usando nome normalizado (previne duplicatas)
-            cursor.execute(query, (nome,))
+            cursor.execute(query, (nome, margem))
             result = cursor.fetchone()
 
-            return dict(result) if result else None
+            if result:
+                # Log do tipo de match encontrado
+                origem = result.get('origem_match', 'desconhecido')
+                similaridade = result.get('similaridade', 1.0)
+
+                if origem == 'exato':
+                    logger.info(f"✓ Produto encontrado (match exato): '{result['nome']}'")
+                elif origem == 'alias':
+                    logger.info(f"✓ Produto encontrado (via alias): '{nome}' → '{result['nome']}'")
+                elif origem == 'alias_fuzzy':
+                    logger.warning(f"⚠ Produto encontrado (fuzzy alias, {similaridade:.1%}): '{nome}' → '{result['nome']}'")
+                elif origem == 'fuzzy':
+                    logger.warning(f"⚠ Produto encontrado (fuzzy, {similaridade:.1%}): '{nome}' → '{result['nome']}'")
+
+                return dict(result)
+
+            return None
 
     def criar_produto(
         self,

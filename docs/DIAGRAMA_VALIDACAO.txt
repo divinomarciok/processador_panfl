@@ -1,0 +1,232 @@
+═══════════════════════════════════════════════════════════════════════════════
+DIAGRAMA: SISTEMA ANTI-DUPLICAÇÃO - FLUXO COMPLETO
+═══════════════════════════════════════════════════════════════════════════════
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 1. LLM EXTRAI DO PANFLETO                                                   │
+│                                                                              │
+│  Panfleto:  [Imagem do supermercado]                                        │
+│             "Abóbora Kabotiá R$ 4,99"                                        │
+│                                                                              │
+│  LLM →  {                                                                    │
+│           "nome": "Abóbora Kabotiá",                                         │
+│           "preco": 4.99,                                                     │
+│           "marca": null,                                                     │
+│           "categoria": "Verduras e Legumes"                                  │
+│         }                                                                    │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                  ↓
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 2. SISTEMA NORMALIZA O NOME                                                 │
+│                                                                              │
+│  normalizar_nome("Abóbora Kabotiá")                                         │
+│                                                                              │
+│  Passos:                                                                     │
+│   1. Lowercase:        Abóbora → abóbora                                    │
+│   2. Remove acentos:   abóbora → abobora                                    │
+│   3. Remove especiais: kabotiá → kabotia                                    │
+│   4. Remove espaços:   abobora  kabotia → abobora kabotia                   │
+│   5. Trim:            ' abobora kabotia ' → 'abobora kabotia'               │
+│                                                                              │
+│  Resultado: "abobora kabotia"                                                │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                  ↓
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 3. BUSCA PRODUTO EXISTENTE (4 CAMADAS)                                      │
+│                                                                              │
+│  ╔════════════════════════════════════════════════════════════════╗         │
+│  ║ CAMADA 1: Busca Exata (nome_normalizado)                      ║         │
+│  ╚════════════════════════════════════════════════════════════════╝         │
+│  SELECT * FROM produtos_tabela                                              │
+│  WHERE nome_normalizado = 'abobora kabotia'                                 │
+│                                                                              │
+│  [NÃO ENCONTRADO] → Vai para Camada 2                                       │
+│  ────────────────────────────────────────────────────────────────           │
+│                                                                              │
+│  ╔════════════════════════════════════════════════════════════════╗         │
+│  ║ CAMADA 2: Busca por Alias (produtos_aliases)                  ║         │
+│  ╚════════════════════════════════════════════════════════════════╝         │
+│  SELECT p.* FROM produtos_tabela p                                          │
+│  JOIN produtos_aliases pa ON p.id = pa.produto_id                           │
+│  WHERE pa.alias_normalizado = 'abobora kabotia'                             │
+│                                                                              │
+│  Aliases cadastrados:                                                        │
+│    produto_id=222, alias="Abóbora Kabotiá"                                  │
+│                                                                              │
+│  ✓ ENCONTRADO! → Produto ID 222: "Abóbora Cabotiá"                          │
+│  Log: "Produto encontrado (via alias): Abóbora Kabotiá → Abóbora Cabotiá"  │
+│  ────────────────────────────────────────────────────────────────           │
+│                                                                              │
+│  ╔════════════════════════════════════════════════════════════════╗         │
+│  ║ CAMADA 3: Busca Fuzzy em Aliases (Levenshtein ≤ 3)            ║         │
+│  ╚════════════════════════════════════════════════════════════════╝         │
+│  (Se não encontrar em Camada 2)                                             │
+│  ────────────────────────────────────────────────────────────────           │
+│                                                                              │
+│  ╔════════════════════════════════════════════════════════════════╗         │
+│  ║ CAMADA 4: Busca Fuzzy em Produtos (Levenshtein ≤ 3)           ║         │
+│  ╚════════════════════════════════════════════════════════════════╝         │
+│  (Se não encontrar em Camadas anteriores)                                   │
+│                                                                              │
+│  Levenshtein('abobora kabotia', 'abobora cabotia') = 2                      │
+│  Similaridade: 86.7% (≥ 85%) ✓                                              │
+│                                                                              │
+│  ✓ ENCONTRADO! → Produto ID 222                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                  ↓
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 4. RESULTADO                                                                 │
+│                                                                              │
+│  [PRODUTO ENCONTRADO]                                                        │
+│  ├─ ID: 222                                                                  │
+│  ├─ Nome: "Abóbora Cabotiá"                                                  │
+│  ├─ Origem: "alias"                                                          │
+│  └─ Similaridade: 100.0%                                                     │
+│                                                                              │
+│  → Usar produto existente (NÃO criar duplicata) ✅                           │
+│  → Salvar preço para produto ID 222                                         │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+
+═══════════════════════════════════════════════════════════════════════════════
+VALIDAÇÃO DE DUPLICATAS (vw_duplicatas_potenciais)
+═══════════════════════════════════════════════════════════════════════════════
+
+Para dois produtos serem considerados DUPLICATAS, precisam passar por 3 filtros:
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ FILTRO 1: Distância Levenshtein ≤ 3                                         │
+│                                                                              │
+│  Exemplo:                                                                    │
+│    "abobora kabotia" → "abobora cabotia"                                     │
+│                                                                              │
+│    Operações:                                                                │
+│      k → c (substituir)                                                      │
+│      i → i (igual)                                                           │
+│                                                                              │
+│    Distância: 2 ✅                                                           │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                  ↓
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ FILTRO 2: Mesma Marca (ou ambos sem marca)                                  │
+│                                                                              │
+│  Casos aceitos:                                                              │
+│    ✓ marca1=NULL    AND marca2=NULL     (ambos sem marca)                   │
+│    ✓ marca1="Duetto" AND marca2="Duetto" (mesma marca)                      │
+│                                                                              │
+│  Casos rejeitados:                                                           │
+│    ✗ marca1="Marilan" AND marca2="Belma" (marcas diferentes)                │
+│                                                                              │
+│  Exemplo:                                                                    │
+│    Produto 1: "Biscoito Laminado" (Marilan)                                 │
+│    Produto 2: "Biscoito Laminados" (Belma)                                  │
+│    → NÃO é duplicata (marcas diferentes) ✅                                  │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                  ↓
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ FILTRO 3: SEM Palavras Diferenciadas                                        │
+│                                                                              │
+│  Função: tem_palavras_diferenciadas(nome1, nome2)                           │
+│                                                                              │
+│  Palavras que indicam PRODUTOS DIFERENTES:                                   │
+│    - dupla, tripla, simples                                                  │
+│    - com osso, sem osso                                                      │
+│    - com tampa, sem tampa                                                    │
+│    - kg, g, l, ml                                                            │
+│    - diet, zero, light                                                       │
+│    - integral, desnatado, semidesnatado                                      │
+│                                                                              │
+│  Lógica:                                                                     │
+│    SE palavra está em nome1 MAS NÃO em nome2 (ou vice-versa)                │
+│    ENTÃO são produtos DIFERENTES                                             │
+│                                                                              │
+│  Exemplo 1:                                                                  │
+│    Produto 1: "Papel Higiênico Folha DUPLA"                                 │
+│    Produto 2: "Papel Higiênico Folha TRIPLA"                                │
+│                                                                              │
+│    "dupla" está em nome1 MAS NÃO em nome2 ✗                                 │
+│    "tripla" está em nome2 MAS NÃO em nome1 ✗                                │
+│                                                                              │
+│    → tem_palavras_diferenciadas() = TRUE                                    │
+│    → NÃO é duplicata! ✅                                                     │
+│                                                                              │
+│  Exemplo 2:                                                                  │
+│    Produto 1: "Queijo Mussarela Fatiado"                                    │
+│    Produto 2: "Queijo Mussarela Fatiada"                                    │
+│                                                                              │
+│    "fatiado" e "fatiada" são variações da mesma palavra ✓                   │
+│                                                                              │
+│    → tem_palavras_diferenciadas() = FALSE                                   │
+│    → PODE ser duplicata ✅                                                   │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                  ↓
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ RESULTADO FINAL                                                              │
+│                                                                              │
+│  SE passar pelos 3 filtros:                                                  │
+│    → É DUPLICATA POTENCIAL                                                   │
+│    → Aparece em vw_duplicatas_potenciais                                     │
+│    → Script pode criar aliases automaticamente                               │
+│                                                                              │
+│  SE falhar em qualquer filtro:                                               │
+│    → NÃO é duplicata                                                         │
+│    → Aparece em vw_produtos_relacionados (se similar)                        │
+│    → São produtos DIFERENTES                                                 │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+
+═══════════════════════════════════════════════════════════════════════════════
+EXEMPLOS PRÁTICOS
+═══════════════════════════════════════════════════════════════════════════════
+
+CASO 1: Duplicata Real (Erro Ortográfico)
+──────────────────────────────────────────
+  Produto 1: "Abóbora Cabotiá"   (marca: NULL)
+  Produto 2: "Abóbora Kabotiá"   (marca: NULL)
+
+  Filtro 1: Levenshtein = 1 ✅ (k→c)
+  Filtro 2: Ambos sem marca ✅
+  Filtro 3: Sem palavras diferenciadas ✅ (só ortografia)
+
+  → É DUPLICATA ✅
+  → Criar alias: produto 222 ↔ "Abóbora Kabotiá"
+
+
+CASO 2: NÃO é Duplicata (Marcas Diferentes)
+────────────────────────────────────────────
+  Produto 1: "Biscoito Laminado"  (marca: Marilan)
+  Produto 2: "Biscoito Laminados" (marca: Belma)
+
+  Filtro 1: Levenshtein = 1 ✅
+  Filtro 2: Marcas diferentes ✗ (Marilan ≠ Belma)
+
+  → NÃO é duplicata ✅
+  → São produtos de marcas diferentes
+
+
+CASO 3: NÃO é Duplicata (Variação de Produto)
+──────────────────────────────────────────────
+  Produto 1: "Papel Higiênico Folha Dupla"  (marca: Duetto)
+  Produto 2: "Papel Higiênico Folha Tripla" (marca: Duetto)
+
+  Filtro 1: Levenshtein = 3 ✅
+  Filtro 2: Mesma marca ✅ (Duetto)
+  Filtro 3: Tem palavras diferenciadas ✗ (dupla ≠ tripla)
+
+  → NÃO é duplicata ✅
+  → São produtos DIFERENTES (folha dupla vs tripla)
+
+
+CASO 4: NÃO é Duplicata (Com/Sem Modificador)
+──────────────────────────────────────────────
+  Produto 1: "Pernil Suíno Sem Osso" (marca: NULL)
+  Produto 2: "Pernil Suíno Com Osso" (marca: NULL)
+
+  Filtro 1: Levenshtein = 2 ✅
+  Filtro 2: Ambos sem marca ✅
+  Filtro 3: Tem palavras diferenciadas ✗ (sem osso ≠ com osso)
+
+  → NÃO é duplicata ✅
+  → São cortes DIFERENTES de carne
+
+═══════════════════════════════════════════════════════════════════════════════
