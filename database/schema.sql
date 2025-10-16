@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS produtos_tabela (
     nome VARCHAR(255) NOT NULL,
     marca VARCHAR(100),
     categoria VARCHAR(100),
+    categoria_sugerida VARCHAR(100),
     codigo_barras VARCHAR(13),
     descricao TEXT,
     created_at TIMESTAMP DEFAULT NOW(),
@@ -17,6 +18,7 @@ CREATE TABLE IF NOT EXISTS produtos_tabela (
 CREATE INDEX IF NOT EXISTS idx_produtos_nome ON produtos_tabela(LOWER(nome));
 CREATE INDEX IF NOT EXISTS idx_produtos_marca ON produtos_tabela(LOWER(marca));
 CREATE INDEX IF NOT EXISTS idx_produtos_codigo_barras ON produtos_tabela(codigo_barras);
+CREATE INDEX IF NOT EXISTS idx_produtos_categoria_sugerida ON produtos_tabela(categoria_sugerida);
 
 -- Tabela de supermercados
 CREATE TABLE IF NOT EXISTS supermercados (
@@ -130,6 +132,7 @@ COMMENT ON TABLE supermercados IS 'Cadastro de supermercados identificados';
 COMMENT ON TABLE imagens_processadas IS 'Log de imagens processadas e seus dados brutos';
 COMMENT ON TABLE precos_panfleto IS 'Histórico de preços extraídos dos panfletos';
 
+COMMENT ON COLUMN produtos_tabela.categoria_sugerida IS 'Categoria original sugerida pelo LLM antes do mapeamento inteligente';
 COMMENT ON COLUMN precos_panfleto.confianca IS 'Nível de confiança da extração (0-1)';
 COMMENT ON COLUMN imagens_processadas.dados_json IS 'JSON bruto retornado pela LLM';
 COMMENT ON COLUMN imagens_processadas.status IS 'Status: pendente, processado, erro, sem_produtos';

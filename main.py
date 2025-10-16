@@ -298,6 +298,88 @@ def mostrar_estatisticas(db: PanfletoDatabase):
     imprimir_separador("-")
 
 
+def mostrar_categorias_sugeridas(db: PanfletoDatabase, limite: int = 20):
+    """
+    Mostra análise de categorias sugeridas pelo LLM.
+
+    Args:
+        db: Instância de PanfletoDatabase
+        limite: Número máximo de categorias a exibir
+    """
+    print("\n🏷️  ANÁLISE DE CATEGORIAS SUGERIDAS:")
+    imprimir_separador("=")
+
+    # Estatísticas de mapeamento
+    print("\n📊 Estatísticas de Mapeamento:")
+    imprimir_separador("-")
+
+    stats_mapeamento = db.obter_estatisticas_mapeamento_categorias()
+
+    for tipo, dados in stats_mapeamento.items():
+        qtd = dados['quantidade']
+        pct = dados['percentual']
+        print(f"  {tipo:20s}: {qtd:5d} produtos ({pct:5.1f}%)")
+
+    # Categorias não mapeadas (classificadas como "Outros")
+    print(f"\n🔍 Top {limite} Categorias Não Mapeadas (classificadas como 'Outros'):")
+    imprimir_separador("-")
+
+    categorias_nao_mapeadas = db.obter_categorias_sugeridas_mais_frequentes(
+        limite=limite,
+        apenas_nao_mapeadas=True
+    )
+
+    if not categorias_nao_mapeadas:
+        print("  ✅ Todas as categorias foram mapeadas com sucesso!")
+    else:
+        print(f"\n  {'Categoria Sugerida':<30} | {'Qtd':>5} | Exemplos de Produtos")
+        print(f"  {'-' * 30}-+-{'-' * 5}-+-{'-' * 50}")
+
+        for cat in categorias_nao_mapeadas:
+            nome_cat = cat['categoria_sugerida']
+            qtd = cat['quantidade']
+            exemplos = cat.get('exemplos_produtos', '')
+
+            # Limitar exemplos a 50 caracteres
+            if exemplos and len(exemplos) > 50:
+                exemplos = exemplos[:47] + "..."
+
+            print(f"  {nome_cat:<30} | {qtd:>5} | {exemplos}")
+
+        print(f"\n💡 Dica: Adicione estas categorias ao MAPEAMENTO_CATEGORIAS")
+        print(f"   ou crie novas categorias no banco de dados.")
+
+    # Categorias mapeadas (diferente da sugerida)
+    print(f"\n✅ Top {limite} Categorias Mapeadas Automaticamente:")
+    imprimir_separador("-")
+
+    categorias_mapeadas = db.obter_categorias_sugeridas_mais_frequentes(
+        limite=limite,
+        apenas_nao_mapeadas=False
+    )
+
+    if not categorias_mapeadas:
+        print("  Nenhuma categoria foi mapeada ainda.")
+    else:
+        print(f"\n  {'Sugerida':<25} | {'Mapeada Para':<25} | {'Qtd':>5}")
+        print(f"  {'-' * 25}-+-{'-' * 25}-+-{'-' * 5}")
+
+        for cat in categorias_mapeadas:
+            sugerida = cat['categoria_sugerida']
+            mapeada = cat.get('categoria_mapeada', 'N/A')
+            qtd = cat['quantidade']
+
+            # Truncar se necessário
+            if len(sugerida) > 25:
+                sugerida = sugerida[:22] + "..."
+            if len(mapeada) > 25:
+                mapeada = mapeada[:22] + "..."
+
+            print(f"  {sugerida:<25} | {mapeada:<25} | {qtd:>5}")
+
+    imprimir_separador("=")
+
+
 def main():
     """Função principal."""
     parser = argparse.ArgumentParser(
@@ -310,6 +392,7 @@ Exemplos de uso:
   python main.py --folder pasta_imagens/
   python main.py --image img.jpg --export dados.csv
   python main.py --stats
+  python main.py --categorias-sugeridas
   python main.py --init-schema
         """
     )
@@ -340,6 +423,12 @@ Exemplos de uso:
         '--stats', '-s',
         action='store_true',
         help='Mostrar estatísticas do banco'
+    )
+
+    parser.add_argument(
+        '--categorias-sugeridas', '--cat',
+        action='store_true',
+        help='Analisar categorias sugeridas pelo LLM'
     )
 
     parser.add_argument(
@@ -379,6 +468,11 @@ Exemplos de uso:
         # Mostrar estatísticas
         if args.stats:
             mostrar_estatisticas(db)
+            return
+
+        # Mostrar análise de categorias sugeridas
+        if args.categorias_sugeridas:
+            mostrar_categorias_sugeridas(db)
             return
 
         # Exportar para CSV
