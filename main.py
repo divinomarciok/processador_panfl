@@ -60,7 +60,8 @@ def imprimir_cabecalho(titulo: str):
 def processar_imagem_unica(
     caminho: str,
     db: PanfletoDatabase,
-    verbose: bool = True
+    verbose: bool = True,
+    supermercado_manual: str = None
 ) -> Dict[str, Any]:
     """
     Processa uma única imagem.
@@ -69,6 +70,7 @@ def processar_imagem_unica(
         caminho: Caminho da imagem
         db: Instância de PanfletoDatabase
         verbose: Se True, imprime detalhes
+        supermercado_manual: Nome do supermercado fornecido manualmente
 
     Returns:
         Dict com estatísticas do processamento
@@ -81,6 +83,12 @@ def processar_imagem_unica(
     try:
         # Processar imagem com LLM
         dados_json = processar_panfleto(caminho)
+
+        # Sobrescrever supermercado se fornecido manualmente
+        if supermercado_manual:
+            dados_json['supermercado'] = supermercado_manual
+            if verbose:
+                print(f"🏪 Supermercado manual: {supermercado_manual}")
 
         if verbose:
             print(f"✅ JSON recebido com {len(dados_json.get('produtos', []))} produtos")
@@ -160,7 +168,8 @@ def processar_imagem_unica(
 def processar_pasta(
     pasta: str,
     db: PanfletoDatabase,
-    verbose: bool = True
+    verbose: bool = True,
+    supermercado_manual: str = None
 ) -> List[Dict[str, Any]]:
     """
     Processa todas as imagens de uma pasta.
@@ -169,6 +178,7 @@ def processar_pasta(
         pasta: Caminho da pasta
         db: Instância de PanfletoDatabase
         verbose: Se True, mostra progresso
+        supermercado_manual: Nome do supermercado fornecido manualmente
 
     Returns:
         Lista com estatísticas de cada imagem
@@ -193,6 +203,8 @@ def processar_pasta(
 
     if verbose:
         print(f"\n📁 Encontradas {len(imagens)} imagens em {pasta}")
+        if supermercado_manual:
+            print(f"🏪 Supermercado aplicado a todas: {supermercado_manual}")
 
     resultados = []
 
@@ -201,7 +213,8 @@ def processar_pasta(
         stats = processar_imagem_unica(
             str(caminho_imagem),
             db,
-            verbose=False  # Não mostrar detalhes individuais em modo pasta
+            verbose=False,  # Não mostrar detalhes individuais em modo pasta
+            supermercado_manual=supermercado_manual
         )
         resultados.append(stats)
 
@@ -390,6 +403,8 @@ Exemplos de uso:
   python main.py imagem.jpg
   python main.py --image imagem.jpg
   python main.py --folder pasta_imagens/
+  python main.py --image img.jpg --supermercado "Assaí"
+  python main.py --folder panfletos/ --supermercado "Campeão"
   python main.py --image img.jpg --export dados.csv
   python main.py --stats
   python main.py --categorias-sugeridas
@@ -435,6 +450,11 @@ Exemplos de uso:
         '--init-schema',
         action='store_true',
         help='Inicializar schema do banco de dados'
+    )
+
+    parser.add_argument(
+        '--supermercado', '--super',
+        help='Nome do supermercado (sobrescreve detecção automática do LLM)'
     )
 
     parser.add_argument(
@@ -485,7 +505,12 @@ Exemplos de uso:
 
         # Processar pasta
         if args.folder:
-            resultados = processar_pasta(args.folder, db, verbose=not args.quiet)
+            resultados = processar_pasta(
+                args.folder,
+                db,
+                verbose=not args.quiet,
+                supermercado_manual=args.supermercado
+            )
 
             # Exportar se solicitado
             if args.export:
@@ -493,7 +518,12 @@ Exemplos de uso:
 
         # Processar imagem única
         elif caminho_imagem:
-            stats = processar_imagem_unica(caminho_imagem, db, verbose=not args.quiet)
+            stats = processar_imagem_unica(
+                caminho_imagem,
+                db,
+                verbose=not args.quiet,
+                supermercado_manual=args.supermercado
+            )
 
             # Exportar se solicitado
             if args.export and 'erro' not in stats:
