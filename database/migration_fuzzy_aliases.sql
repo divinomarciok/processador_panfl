@@ -314,8 +314,17 @@ BEGIN
     END IF;
 
     -- 2. BUSCA POR ALIAS (exato)
+    -- CORRIGIDO: Adicionar coluna similaridade explicitamente
     RETURN QUERY
-    SELECT * FROM buscar_produto_por_alias(p_nome);
+    SELECT
+        pa.id,
+        pa.nome,
+        pa.nome_normalizado,
+        pa.marca,
+        pa.categoria,
+        1.0::DECIMAL as similaridade,  -- Match exato por alias
+        pa.origem_match
+    FROM buscar_produto_por_alias(p_nome) pa;
 
     IF FOUND THEN
         RETURN;
