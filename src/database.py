@@ -619,12 +619,96 @@ class PanfletoDatabase:
         super_id = self.criar_supermercado(nome)
         return super_id, True
 
+    def _extrair_contexto_compartilhado(self, nome_original: str, partes: List[str]) -> Optional[str]:
+        """
+        Detecta contexto compartilhado no início do nome original.
+
+        Exemplos:
+        - "Bombom Sonho de Valsa ou Ouro Branco" → "Bombom"
+        - "Coca-Cola Tradicional ou Zero" → "Coca-Cola"
+        - "Picanha ou Alcatra" → None
+
+        Args:
+            nome_original: Nome original completo
+            partes: Lista de partes divididas por "ou"
+
+        Returns:
+            Contexto compartilhado ou None
+        """
+        if not partes or len(partes) < 2:
+            return None
+
+        # Verificar se alguma parte é "incompleta" (curta demais ou 1 palavra)
+        # Se todas as partes parecem completas, não há contexto
+        partes_incompletas = [
+            p for p in partes[1:]  # Ignorar primeira parte
+            if len(p) <= 15 or len(p.split()) == 1
+        ]
+
+        if not partes_incompletas:
+            # Todas as partes parecem completas, sem contexto
+            return None
+
+        # Há partes incompletas, extrair contexto da primeira parte
+        primeira_parte = partes[0]
+        palavras_primeira = primeira_parte.split()
+
+        # Se primeira parte tem só 1 palavra, não há contexto
+        if len(palavras_primeira) <= 1:
+            return None
+
+        # Contexto = todas as palavras EXCETO a última da primeira parte
+        # Ex: "Coca-Cola Tradicional" → contexto = "Coca-Cola", variação = "Tradicional"
+        contexto = ' '.join(palavras_primeira[:-1])
+
+        logger.debug(f"Contexto detectado: '{contexto}' em '{nome_original}'")
+        return contexto
+
+    def _parte_precisa_contexto(self, parte: str, contexto: Optional[str]) -> bool:
+        """
+        Verifica se uma parte precisa de contexto adicionado.
+
+        Args:
+            parte: Parte do nome (após divisão por "ou")
+            contexto: Contexto detectado (pode ser None)
+
+        Returns:
+            True se precisa adicionar contexto
+        """
+        # Se não tem contexto detectado, não adiciona
+        if not contexto:
+            return False
+
+        # Se parte já contém o contexto, não adiciona
+        if contexto.lower() in parte.lower():
+            return False
+
+        # Regra 1: Se parte é muito curta (≤ 15 chars), provavelmente precisa contexto
+        if len(parte) <= 15:
+            return True
+
+        # Regra 2: Se parte tem apenas 1 palavra, provavelmente é variação
+        palavras = parte.split()
+        if len(palavras) == 1:
+            return True
+
+        # Regra 3: Se primeira letra é minúscula, não é nome completo
+        if parte and parte[0].islower():
+            return True
+
+        # Caso contrário, assumir que é nome completo
+        return False
+
     def _expandir_produtos_multiplos(self, produto_data: Dict) -> List[Dict]:
         """
-        Expande produtos que contêm "ou" no nome em múltiplos produtos.
+        Expande produtos que contêm "ou" no nome em múltiplos produtos,
+        mantendo contexto quando necessário.
 
-        Exemplo: "Picanha OU Alcatra OU Contra Filé"
-        -> ["Picanha", "Alcatra", "Contra Filé"]
+        Exemplos:
+        - "Picanha ou Alcatra" → ["Picanha", "Alcatra"]
+        - "Coca-Cola Tradicional ou Zero" → ["Coca-Cola Tradicional", "Coca-Cola Zero"]
+        - "Bombom Sonho de Valsa ou Ouro Branco" → ["Bombom Sonho de Valsa", "Bombom Ouro Branco"]
+        - "Leite Integral ou Desnatado" → ["Leite Integral", "Leite Desnatado"]
 
         Args:
             produto_data: Dict com dados do produto do LLM
@@ -635,24 +719,35 @@ class PanfletoDatabase:
         nome = produto_data.get('nome', '')
 
         # Detectar " ou " no nome (case insensitive)
-        # Padrão: procura por "ou" cercado por espaços
-        if re.search(r'\s+ou\s+', nome, re.IGNORECASE):
-            # Dividir por "ou" e limpar espaços
-            nomes = re.split(r'\s+ou\s+', nome, flags=re.IGNORECASE)
-            nomes = [n.strip() for n in nomes if n.strip()]
+        if not re.search(r'\s+ou\s+', nome, re.IGNORECASE):
+            return [produto_data]
 
-            # Criar cópia do produto para cada nome
-            produtos_expandidos = []
-            for nome_individual in nomes:
-                produto_copia = produto_data.copy()
-                produto_copia['nome'] = nome_individual
-                produtos_expandidos.append(produto_copia)
+        # Dividir por "ou" e limpar espaços
+        partes = re.split(r'\s+ou\s+', nome, flags=re.IGNORECASE)
+        partes = [p.strip() for p in partes if p.strip()]
 
-            logger.info(f"Produto expandido: '{nome}' → {len(produtos_expandidos)} produtos")
-            return produtos_expandidos
+        # Detectar contexto compartilhado
+        contexto = self._extrair_contexto_compartilhado(nome, partes)
 
-        # Se não tem "ou", retorna lista com produto original
-        return [produto_data]
+        # Expandir produtos adicionando contexto quando necessário
+        produtos_expandidos = []
+
+        for parte in partes:
+            produto_copia = produto_data.copy()
+
+            # Verificar se precisa adicionar contexto
+            if self._parte_precisa_contexto(parte, contexto):
+                nome_completo = f"{contexto} {parte}"
+                produto_copia['nome'] = nome_completo
+                logger.debug(f"  '{parte}' → '{nome_completo}' (contexto adicionado)")
+            else:
+                produto_copia['nome'] = parte
+                logger.debug(f"  '{parte}' (sem alteração)")
+
+            produtos_expandidos.append(produto_copia)
+
+        logger.info(f"Produto expandido: '{nome}' → {len(produtos_expandidos)} produtos")
+        return produtos_expandidos
 
     def salvar_preco(
         self,
